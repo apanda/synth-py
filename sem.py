@@ -69,18 +69,24 @@ class Configuration(object):
     inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
     return (outbound_allowed and inbound_allowed)
 
-  def direct_connection_allowed (self, src, dest, port):
-    srcSG = self.instance_map.get(src, SecurityGroup.world)
-    destSG = self.instance_map.get(dest, SecurityGroup.world)
-    return self.connection_allowed_secgroups(srcSG, destSG, port)
-
   def groups_with_access (self, target, port):
     inboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[target].inbound)
     outboundSG = map(lambda a: self.secgroup_map[a.grant], inboundPossible)
     groups = filter(lambda a: self.acls_allow_connection(target, port, a.outbound), outboundSG)
     return map(lambda sg: sg.name, groups)
 
+  def direct_connection_allowed (self, src, dest, port):
+    """Check if this configuration allows direct connection on a particular port between a source and destination. A
+    machine name that is not a valid instance is treated as being outside the datacenter"""
+    srcSG = self.instance_map.get(src, SecurityGroup.world)
+    destSG = self.instance_map.get(dest, SecurityGroup.world)
+    return self.connection_allowed_secgroups(srcSG, destSG, port)
+
+
   def indirect_connection_allowed (self, src, dest, port):
+    """Check if this configuration allows indirect connection (i.e. can we chain together machines, using the same 
+    protocol) on a particular port between a source and destination. A machine name that is not a valid instance is 
+    treated as being outside the datacenter"""
     srcSG = self.instance_map.get(src, SecurityGroup.world)
     destSG = self.instance_map.get(dest, SecurityGroup.world)
     to_explore = [destSG]
@@ -97,6 +103,23 @@ class Configuration(object):
         others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
         to_explore.extend(others)
     return False
+
+  def direct_connection_fix (self, src, dest, port):
+    if self.direct_connection_allowed(src, dest, port):
+      return [] # Don't need to fix anything.
+    else:
+      # Find each of them
+      srcSG = self.instance_map.get(src, SecurityGroup.world)
+      destSG = self.instance_map.get(dest, SecurityGroup.world)
+      outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
+      inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
+      fix = []
+      if not outbound_allowed:
+        fix.append((srcSG, "outbound", ACL(destSG, port)))
+      if not inbound_allowed:
+        fix.append((destSG, "inbound", ACL(srcSG, port)))
+      # Only one fix in this case, no choosing of what is better
+      return [fix]
 
 
 test_config = \
