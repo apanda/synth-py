@@ -133,9 +133,12 @@ class Configuration(object):
     treated as being outside the datacenter"""
     srcSG = self.instance_map.get(src, SecurityGroup.world)
     destSG = self.instance_map.get(dest, SecurityGroup.world)
+    origDestSG = destSG
     to_explore = [destSG]
     explored = set()
     fixes = []
+    # Explore by changing the destination further away, the ideas is to take the transitive closure of all groups 
+    # reachable from the destination and connect source to this.
     while to_explore:
       destSG = to_explore.pop()
       if destSG in explored:
@@ -155,7 +158,31 @@ class Configuration(object):
           fix.append((destSG, "inbound", ACL(srcSG, port)))
         fixes.append(fix)
         to_explore.extend(others)
-        print destSG, others
+    destSG = origDestSG
+    explored.clear()
+    to_explore = self.groups_with_outbound_access(srcSG, port)
+    explored.add(srcSG)
+    while to_explore:
+      srcSG = to_explore.pop()
+      if srcSG in explored:
+        continue
+      elif self.connection_allowed_secgroups(srcSG, destSG, port):
+        return []
+      else:
+        explored.add(destSG)
+        others = self.groups_with_outbound_access(srcSG, port)
+        others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
+        outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
+        inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
+        fix = []
+        if not outbound_allowed:
+          fix.append((srcSG, "outbound", ACL(destSG, port)))
+        if not inbound_allowed:
+          fix.append((destSG, "inbound", ACL(srcSG, port)))
+        fixes.append(fix)
+        to_explore.extend(others)
+    min_fix_length = min(map(len, fixes))
+    fixes = filter(lambda c: len(c) == min_fix_length, fixes)
     return fixes
 
 test_config = \
