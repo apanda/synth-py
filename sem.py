@@ -111,6 +111,7 @@ class Configuration(object):
     return False
 
   def direct_connection_fix (self, src, dest, port):
+    """Fix cases where VMs are not directly connected"""
     if self.direct_connection_allowed(src, dest, port):
       return [] # Don't need to fix anything.
     else:
@@ -162,6 +163,7 @@ class Configuration(object):
     explored.clear()
     to_explore = self.groups_with_outbound_access(srcSG, port)
     explored.add(srcSG)
+    # Transitive closure from the source. Essentially find everything reachable from the source
     while to_explore:
       srcSG = to_explore.pop()
       if srcSG in explored:
@@ -272,3 +274,7 @@ test_config5 = \
         [("sg2", 1, 65535),
          ("sg3", 1, 65535)])],
       [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
+
+if __name__ == "__main__":
+  print test_config4.indirect_connection_fix("a", "c", 22)
+  print test_config5.indirect_connection_fix("d", "a", 22)
