@@ -121,6 +121,36 @@ class Configuration(object):
       # Only one fix in this case, no choosing of what is better
       return [fix]
 
+  def indirect_connection_fix (self, src, dest, port):
+    """Check if this configuration allows indirect connection (i.e. can we chain together machines, using the same 
+    protocol) on a particular port between a source and destination. A machine name that is not a valid instance is 
+    treated as being outside the datacenter"""
+    srcSG = self.instance_map.get(src, SecurityGroup.world)
+    destSG = self.instance_map.get(dest, SecurityGroup.world)
+    to_explore = [destSG]
+    explored = set()
+    fixes = []
+    while to_explore:
+      destSG = to_explore.pop()
+      if destSG in explored:
+        continue
+      elif self.connection_allowed_secgroups(srcSG, destSG, port):
+        return []
+      else:
+        explored.add(destSG)
+        others = self.groups_with_access(destSG, port)
+        others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
+        outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
+        inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
+        fix = []
+        if not outbound_allowed:
+          fix.append((srcSG, "outbound", ACL(destSG, port)))
+        if not inbound_allowed:
+          fix.append((destSG, "inbound", ACL(srcSG, port)))
+        fixes.append(fix)
+        to_explore.extend(others)
+        print destSG, others
+    return fixes
 
 test_config = \
     Configuration(\
@@ -187,3 +217,25 @@ test_config4 = \
         [("sg2", 1, 65535),
          ("sg3", 1, 65535)])],
       [("a", "sg1"), ("c", "sg3")])
+
+test_config5 = \
+    Configuration(\
+     [("sg1",
+       [("sg1", 1, 65535),
+        ("sg2", 1, 65535)],
+       [("sg1", 1, 65535)]),
+      ("sg2",
+        [("sg2", 1, 65535),
+         ("sg3", 1, 65535)],
+        [("sg1", 1, 65535),
+         ("sg2", 1, 65535)]),
+      ("sg3",
+        [],
+        [("sg2", 22)]),
+      ("sg4",
+        [("any", 22),
+         ("any", 80),
+         ("sg3", 1, 65535)],
+        [("sg2", 1, 65535),
+         ("sg3", 1, 65535)])],
+      [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
