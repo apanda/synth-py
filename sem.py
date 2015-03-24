@@ -24,12 +24,26 @@ class SecurityGroup(object):
     self.inbound = map(lambda i: ACL(*i), inbound)
     self.outbound = map(lambda i: ACL(*i), outbound)
 
-  def allowsInboundConnection (group, port):
+  def allowsInboundConnection (self, group, port):
+    """Does this security group allow inbound connection from group and port"""
     return any(map(lambda acl: acl.allowsConnection(group, port), self.inbound))
 
-  def allowsOutboundConnection (group, port):
+  def allowsOutboundConnection (self, group, port):
+    """Does this security group allow outbound connection to group and port"""
     return any(map(lambda acl: acl.allowsConnection(group, port), self.outbound))
   
+  def allowsInboundPort (self, port):
+    """Does this security group allow inbound connection on port"""
+    return any(map(lambda acl: acl.allowsPort(port), self.inbound))
+
+  def allowsOutboundConnection (self, group, port):
+    """Does this security group allow outbound connection to group and port"""
+    return any(map(lambda acl: acl.allowsConnection(group, port), self.outbound))
+
+  def allowsOutboundPort (self, port):
+    """Does this security group allow outbound connection on port"""
+    return any(map(lambda acl: acl.allowsPort(port), self.outbound))
+
   def __repr__ (self):
     return "%s <<Inbound>> [%s] <<Outbound>> [%s]"%(self.name, ' '.join(map(str, self.inbound)), \
         ' '.join(map(str, self.outbound)))
@@ -65,21 +79,26 @@ class Configuration(object):
     return any(map(lambda a: a.allowsConnection(sg, port), acls))
 
   def connection_allowed_secgroups (self, srcSG, destSG, port):
-    outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
-    inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
+    """Can two security groups talk to each other over a specific port"""
+    outbound_allowed = self.secgroup_map[srcSG].allowsOutboundConnection(destSG, port)
+    inbound_allowed = self.secgroup_map[destSG].allowsInboundConnection(srcSG, port)
     return (outbound_allowed and inbound_allowed)
 
   def groups_with_inbound_access (self, target, port):
+    """Find all groups that can connect to target at port"""
+    # Get a list of all security groups from which target would accept connection at port.
     inboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[target].inbound)
-    outboundSG = map(lambda a: self.secgroup_map[a.grant], inboundPossible)
-    groups = filter(lambda a: self.acls_allow_connection(target, port, a.outbound), outboundSG)
-    return map(lambda sg: sg.name, groups)
+    # Get the subset of the above that allow outbound connections to the target group at port.
+    groups = filter(lambda a: self.secgroup_map[a.grant].allowsOutboundConnection(target, port), inboundPossible)
+    return map(lambda acl: acl.grant, groups)
 
   def groups_with_outbound_access (self, src, port):
+    """Find all groups that src can connect to at port"""
+    # Get a list of all ports to which source can connect
     outboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[src].outbound)
-    inboundSG = map(lambda a: self.secgroup_map[a.grant], outboundPossible)
-    groups = filter(lambda a: self.acls_allow_connection(src, port, a.inbound), inboundSG)
-    return map(lambda sg: sg.name, groups)
+    # Find those that allow connection
+    groups = filter(lambda a: self.secgroup_map[a.grant].allowsInboundConnection(src, port), outboundPossible)
+    return map(lambda acl: acl.grant, groups)
 
   def direct_connection_allowed (self, src, dest, port):
     """Check if this configuration allows direct connection on a particular port between a source and destination. A
@@ -163,26 +182,30 @@ class Configuration(object):
     explored.clear()
     to_explore = self.groups_with_outbound_access(srcSG, port)
     explored.add(srcSG)
-    # Transitive closure from the source. Essentially find everything reachable from the source
-    while to_explore:
-      srcSG = to_explore.pop()
-      if srcSG in explored:
-        continue
-      elif self.connection_allowed_secgroups(srcSG, destSG, port):
-        return []
-      else:
-        explored.add(destSG)
-        others = self.groups_with_outbound_access(srcSG, port)
-        others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
-        outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
-        inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
-        fix = []
-        if not outbound_allowed:
-          fix.append((srcSG, "outbound", ACL(destSG, port)))
-        if not inbound_allowed:
-          fix.append((destSG, "inbound", ACL(srcSG, port)))
-        fixes.append(fix)
-        to_explore.extend(others)
+
+    # This is actually not necessary. In the previous case, we usually only need 1 additional ACL. Any case where
+    # there is not an overlap here will require 2.
+
+    ## Transitive closure from the source. Essentially find everything reachable from the source
+    #while to_explore:
+      #srcSG = to_explore.pop()
+      #if srcSG in explored:
+        #continue
+      #elif self.connection_allowed_secgroups(srcSG, destSG, port):
+        #return []
+      #else:
+        #explored.add(destSG)
+        #others = self.groups_with_outbound_access(srcSG, port)
+        #others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
+        #outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
+        #inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
+        #fix = []
+        #if not outbound_allowed:
+          #fix.append((srcSG, "outbound", ACL(destSG, port)))
+        #if not inbound_allowed:
+          #fix.append((destSG, "inbound", ACL(srcSG, port)))
+        #fixes.append(fix)
+        #to_explore.extend(others)
     min_fix_length = min(map(len, fixes))
     fixes = filter(lambda c: len(c) == min_fix_length, fixes)
     return fixes
