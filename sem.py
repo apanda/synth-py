@@ -69,10 +69,16 @@ class Configuration(object):
     inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
     return (outbound_allowed and inbound_allowed)
 
-  def groups_with_access (self, target, port):
+  def groups_with_inbound_access (self, target, port):
     inboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[target].inbound)
     outboundSG = map(lambda a: self.secgroup_map[a.grant], inboundPossible)
     groups = filter(lambda a: self.acls_allow_connection(target, port, a.outbound), outboundSG)
+    return map(lambda sg: sg.name, groups)
+
+  def groups_with_outbound_access (self, src, port):
+    outboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[src].outbound)
+    inboundSG = map(lambda a: self.secgroup_map[a.grant], outboundPossible)
+    groups = filter(lambda a: self.acls_allow_connection(src, port, a.inbound), inboundSG)
     return map(lambda sg: sg.name, groups)
 
   def direct_connection_allowed (self, src, dest, port):
@@ -99,7 +105,7 @@ class Configuration(object):
         return True
       else:
         explored.add(destSG)
-        others = self.groups_with_access(destSG, port)
+        others = self.groups_with_inbound_access(destSG, port)
         others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
         to_explore.extend(others)
     return False
@@ -138,7 +144,7 @@ class Configuration(object):
         return []
       else:
         explored.add(destSG)
-        others = self.groups_with_access(destSG, port)
+        others = self.groups_with_inbound_access(destSG, port)
         others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
         outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
         inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
