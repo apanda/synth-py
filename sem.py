@@ -1,3 +1,5 @@
+import networkx as nx
+from itertools import combinations
 class ACL(object):
   """Represent a single ACL"""
   def __init__ (self, grant, portmin, portmax = None):
@@ -71,7 +73,6 @@ class Configuration(object):
     for instance in self.instances:
       self.instance_per_sg[instance.group] = self.instance_per_sg.get(instance.group, 0) + 1
     self.instance_per_sg[SecurityGroup.world] = float("inf") # Overkill
-
   def __repr__ (self):
     return "Security groups: \n\t%s\n Instances: \n\t%s"%('\n\t'.join(map(str, self.secgroups)), \
         '\n\t'.join(map(str, self.instances)))
@@ -136,14 +137,7 @@ class Configuration(object):
         to_explore.extend(others)
     return False
 
-  def direct_connection_fix (self, src, dest, port):
-    """Fix cases where VMs are not directly connected"""
-    if self.direct_connection_allowed(src, dest, port):
-      return [] # Don't need to fix anything.
-    else:
-      # Find each of them
-      srcSG = self.instance_map.get(src, SecurityGroup.world)
-      destSG = self.instance_map.get(dest, SecurityGroup.world)
+  def direct_connection_fix_sg (self, srcSG, destSG, port):
       outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
       inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
       fix = []
@@ -152,7 +146,17 @@ class Configuration(object):
       if not inbound_allowed:
         fix.append((destSG, "inbound", ACL(srcSG, port)))
       # Only one fix in this case, no choosing of what is better
-      return [fix]
+      return fix
+
+  def direct_connection_fix (self, src, dest, port):
+    """Fix cases where VMs are not directly connected"""
+    if self.direct_connection_allowed(src, dest, port):
+      return [] # Don't need to fix anything.
+    else:
+      # Find each of them
+      srcSG = self.instance_map.get(src, SecurityGroup.world)
+      destSG = self.instance_map.get(dest, SecurityGroup.world)
+      return [self.direct_connection_fix_sg(srcSG, destSG, port)]
 
   def fix_metric (self, fix):
     """Metric for goodness of fix. We are basically asking how many new machines can now directly connect to some SG
@@ -165,6 +169,34 @@ class Configuration(object):
     sg1 = fix[0]
     sg2 = fix[2].grant
     return max(self.instance_per_sg[sg1], self.instance_per_sg[sg2])
+
+  def indirect_connection_fix_graph (self, src, dest, port):
+    graph = nx.DiGraph()
+    graph.add_nodes_from(self.secgroup_map.keys())
+    for (sa, sb) in combinations(self.secgroup_map.keys(), 2):
+      if self.instance_per_sg.get(sa, 0) == 0:
+        continue
+      if self.instance_per_sg.get(sb, 0) == 0:
+        continue
+      if self.connection_allowed_secgroups(sa, sb, port):
+        graph.add_edge(sa, sb, weight=0)
+      else:
+        graph.add_edge(sa, sb, weight = self.instance_per_sg[sa])
+
+      if self.connection_allowed_secgroups(sb, sa, port):
+        graph.add_edge(sb, sa, weight=0)
+      else:
+        graph.add_edge(sb, sa, weight = self.instance_per_sg[sb])
+    srcSG = self.instance_map.get(src, SecurityGroup.world)
+    destSG = self.instance_map.get(dest, SecurityGroup.world)
+    paths = nx.all_shortest_paths(graph, srcSG, destSG, weight = "weight")
+    edges = map(lambda l: zip(l, l[1:]), paths)
+    weights = map(lambda l: map(lambda e: (e, graph.get_edge_data(*e)['weight']), l), edges)
+    non_zero_edges = map(lambda l: filter(lambda (e, w): w > 0, l), weights)
+    just_edges = map(lambda l: map(lambda (e, w): e, l), non_zero_edges)
+    fixes = map(lambda l: map(lambda (e1, e2): self.direct_connection_fix_sg(e1, e2, port), l), just_edges)
+    return fixes
+
 
   def indirect_connection_fix (self, src, dest, port):
     """Check if this configuration allows indirect connection (i.e. can we chain together machines, using the same 
@@ -228,7 +260,7 @@ class Configuration(object):
     filtered_fixes = filter(lambda c: len(c) == min_fix_length, fixes)
     return (fixes, filtered_fixes)
 
-test_config = \
+test_config1 = \
     Configuration(\
       [("frontend", 
          [("frontend", 1, 65535),
@@ -340,5 +372,14 @@ test_config6 = \
       [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
 
 if __name__ == "__main__":
-  print test_config4.indirect_connection_fix("a", "c", 22)
-  print test_config5.indirect_connection_fix("d", "a", 22)
+  configs = [test_config1, test_config2, test_config3, test_config4, test_config5, test_config6]
+  for config in configs:
+    print config
+    instances = map(lambda i: i.name, config.instances)
+    instances.append("z")
+    for (ia, ib) in combinations(instances, 2):
+      print "Testing %s %s"%(ia, ib)
+      if not config.indirect_connection_allowed(ia, ib, 22):
+        print "Fix for %s %s is %s"%(ia, ib, "\n\t".join(map(str, config.indirect_connection_fix_graph(ia, ib, 22))))
+      else:
+        print "%s %s allowed"%(ia, ib)
