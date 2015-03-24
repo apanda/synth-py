@@ -70,6 +70,7 @@ class Configuration(object):
     self.instance_per_sg = {}
     for instance in self.instances:
       self.instance_per_sg[instance.group] = self.instance_per_sg.get(instance.group, 0) + 1
+    self.instance_per_sg[SecurityGroup.world] = float("inf") # Overkill
 
   def __repr__ (self):
     return "Security groups: \n\t%s\n Instances: \n\t%s"%('\n\t'.join(map(str, self.secgroups)), \
@@ -87,7 +88,10 @@ class Configuration(object):
   def groups_with_inbound_access (self, target, port):
     """Find all groups that can connect to target at port"""
     # Get a list of all security groups from which target would accept connection at port.
-    inboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[target].inbound)
+    if target is SecurityGroup.world:
+      inboundPossible = map(lambda a: ACL(a, 1, 65535), self.secgroup_map.keys())
+    else:
+      inboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[target].inbound)
     # Get the subset of the above that allow outbound connections to the target group at port.
     groups = filter(lambda a: self.secgroup_map[a.grant].allowsOutboundConnection(target, port), inboundPossible)
     return map(lambda acl: acl.grant, groups)
@@ -95,7 +99,10 @@ class Configuration(object):
   def groups_with_outbound_access (self, src, port):
     """Find all groups that src can connect to at port"""
     # Get a list of all ports to which source can connect
-    outboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[src].outbound)
+    if src is SecurityGroup.world:
+      outboundPossible = map(lambda a: ACL(a, 1, 65535), self.secgroup_map.keys())
+    else:
+      outboundPossible = filter(lambda a: a.allowsPort(port), self.secgroup_map[src].outbound)
     # Find those that allow connection
     groups = filter(lambda a: self.secgroup_map[a.grant].allowsInboundConnection(src, port), outboundPossible)
     return map(lambda acl: acl.grant, groups)
@@ -147,6 +154,18 @@ class Configuration(object):
       # Only one fix in this case, no choosing of what is better
       return [fix]
 
+  def fix_metric (self, fix):
+    """Metric for goodness of fix. We are basically asking how many new machines can now directly connect to some SG
+    because of this fix"""
+    # No new connectivity
+    if not fix:
+      return 0
+    # A fix only connects two groups, so is fine
+    fix = fix[0]
+    sg1 = fix[0]
+    sg2 = fix[2].grant
+    return max(self.instance_per_sg[sg1], self.instance_per_sg[sg2])
+
   def indirect_connection_fix (self, src, dest, port):
     """Check if this configuration allows indirect connection (i.e. can we chain together machines, using the same 
     protocol) on a particular port between a source and destination. A machine name that is not a valid instance is 
@@ -183,32 +202,31 @@ class Configuration(object):
     to_explore = self.groups_with_outbound_access(srcSG, port)
     explored.add(srcSG)
 
-    # This is actually not necessary. In the previous case, we usually only need 1 additional ACL. Any case where
-    # there is not an overlap here will require 2.
-
     ## Transitive closure from the source. Essentially find everything reachable from the source
-    #while to_explore:
-      #srcSG = to_explore.pop()
-      #if srcSG in explored:
-        #continue
-      #elif self.connection_allowed_secgroups(srcSG, destSG, port):
-        #return []
-      #else:
-        #explored.add(destSG)
-        #others = self.groups_with_outbound_access(srcSG, port)
-        #others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
-        #outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
-        #inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
-        #fix = []
-        #if not outbound_allowed:
-          #fix.append((srcSG, "outbound", ACL(destSG, port)))
-        #if not inbound_allowed:
-          #fix.append((destSG, "inbound", ACL(srcSG, port)))
-        #fixes.append(fix)
-        #to_explore.extend(others)
-    min_fix_length = min(map(len, fixes))
-    fixes = filter(lambda c: len(c) == min_fix_length, fixes)
-    return fixes
+    while to_explore:
+      srcSG = to_explore.pop()
+      if srcSG in explored:
+        continue
+      elif self.connection_allowed_secgroups(srcSG, destSG, port):
+        return []
+      else:
+        explored.add(destSG)
+        others = self.groups_with_outbound_access(srcSG, port)
+        others = filter(lambda a: a not in explored and (self.instance_per_sg.get(a, 0) > 0), others)
+        outbound_allowed = self.acls_allow_connection(destSG, port, self.secgroup_map[srcSG].outbound)
+        inbound_allowed = self.acls_allow_connection(srcSG, port, self.secgroup_map[destSG].inbound) 
+        fix = []
+        if not outbound_allowed:
+          fix.append((srcSG, "outbound", ACL(destSG, port)))
+        if not inbound_allowed:
+          fix.append((destSG, "inbound", ACL(srcSG, port)))
+        fixes.append(fix)
+        to_explore.extend(others)
+
+    min_fix_length = min(map(self.fix_metric, fixes))
+    
+    filtered_fixes = filter(lambda c: len(c) == min_fix_length, fixes)
+    return (fixes, filtered_fixes)
 
 test_config = \
     Configuration(\
@@ -296,6 +314,29 @@ test_config5 = \
          ("sg3", 1, 65535)],
         [("sg2", 1, 65535),
          ("sg3", 1, 65535)])],
+      [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
+
+# In this case I am clearly missing one correct answer, which is to try and connect
+# sg3 - sg2
+test_config6 = \
+    Configuration(\
+     [("sg1",
+       [("sg1", 1, 65535),
+        ("sg2", 1, 65535)],
+       [("sg1", 1, 65535)]),
+      ("sg2",
+        [("sg2", 1, 65535),
+         ("sg3", 1, 65535)],
+        [("sg1", 1, 65535),
+         ("sg2", 1, 65535)]),
+      ("sg3",
+        [("sg4", 22)],
+        []),
+      ("sg4",
+        [("any", 22),
+         ("any", 80),
+         ("sg3", 1, 65535)],
+        [("sg3", 1, 65535)])],
       [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
 
 if __name__ == "__main__":
