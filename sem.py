@@ -72,7 +72,7 @@ class Configuration(object):
     self.instance_per_sg = {}
     for instance in self.instances:
       self.instance_per_sg[instance.group] = self.instance_per_sg.get(instance.group, 0) + 1
-    self.instance_per_sg[SecurityGroup.world] = float("inf") # Overkill
+    self.instance_per_sg[SecurityGroup.world] = 65535 # Overkill
   def __repr__ (self):
     return "Security groups: \n\t%s\n Instances: \n\t%s"%('\n\t'.join(map(str, self.secgroups)), \
         '\n\t'.join(map(str, self.instances)))
@@ -171,6 +171,7 @@ class Configuration(object):
     return max(self.instance_per_sg[sg1], self.instance_per_sg[sg2])
 
   def indirect_connection_fix_graph (self, src, dest, port):
+    """Yaron's algorithm for incremental indirect connection fixing"""
     graph = nx.DiGraph()
     graph.add_nodes_from(self.secgroup_map.keys())
     for (sa, sb) in combinations(self.secgroup_map.keys(), 2):
@@ -178,15 +179,16 @@ class Configuration(object):
         continue
       if self.instance_per_sg.get(sb, 0) == 0:
         continue
+      weight = max(self.instance_per_sg[sa], self.instance_per_sg[sb])
       if self.connection_allowed_secgroups(sa, sb, port):
         graph.add_edge(sa, sb, weight=0)
       else:
-        graph.add_edge(sa, sb, weight = self.instance_per_sg[sa])
+        graph.add_edge(sa, sb, weight = weight)
 
       if self.connection_allowed_secgroups(sb, sa, port):
         graph.add_edge(sb, sa, weight=0)
       else:
-        graph.add_edge(sb, sa, weight = self.instance_per_sg[sb])
+        graph.add_edge(sb, sa, weight = weight)
     srcSG = self.instance_map.get(src, SecurityGroup.world)
     destSG = self.instance_map.get(dest, SecurityGroup.world)
     paths = nx.all_shortest_paths(graph, srcSG, destSG, weight = "weight")
@@ -195,7 +197,7 @@ class Configuration(object):
     non_zero_edges = map(lambda l: filter(lambda (e, w): w > 0, l), weights)
     just_edges = map(lambda l: map(lambda (e, w): e, l), non_zero_edges)
     fixes = map(lambda l: map(lambda (e1, e2): self.direct_connection_fix_sg(e1, e2, port), l), just_edges)
-    return fixes
+    return non_zero_edges
 
 
   def indirect_connection_fix (self, src, dest, port):
