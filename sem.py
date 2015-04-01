@@ -10,6 +10,7 @@ class ACL(object):
     self.portmax = portmax
 
   def allowsPort (self, port):
+    """ Does this ACL allow a particular port through"""
     return ((self.portmin <= port) and (port <= self.portmax))
 
   def allowsConnection (self, group, port):
@@ -72,10 +73,12 @@ class Configuration(object):
     self.instance_per_sg = {}
     for instance in self.instances:
       self.instance_per_sg[instance.group] = self.instance_per_sg.get(instance.group, 0) + 1
-    self.instance_per_sg[SecurityGroup.world] = 65535 # Overkill
+    self.instance_per_sg[SecurityGroup.world] = float("inf") # Overkill
   def __repr__ (self):
-    return "Security groups: \n\t%s\n Instances: \n\t%s"%('\n\t'.join(map(str, self.secgroups)), \
-        '\n\t'.join(map(str, self.instances)))
+    return "Security groups: \n\t%s\n Instances: \n\t%s\n Security Group weights: \n\t%s"%\
+        ('\n\t'.join(map(str, self.secgroups)), \
+        '\n\t'.join(map(str, self.instances)),\
+        '\n\t'.join(map(lambda (a, b): '%s %s'%(a, str(b)), self.instance_per_sg.items())))
 
   def acls_allow_connection (self, sg, port, acls):
     return any(map(lambda a: a.allowsConnection(sg, port), acls))
@@ -350,16 +353,16 @@ test_config5 = \
          ("sg3", 1, 65535)])],
       [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
 
-# In this case I am clearly missing one correct answer, which is to try and connect
-# sg3 - sg2
 test_config6 = \
     Configuration(\
      [("sg1",
        [("sg1", 1, 65535),
         ("sg2", 1, 65535)],
-       [("sg1", 1, 65535)]),
+       [("sg1", 1, 65535),
+         ("sg2", 1, 65535)]),
       ("sg2",
-        [("sg2", 1, 65535),
+        [("sg1", 1, 65535),
+          ("sg2", 1, 65535),
          ("sg3", 1, 65535)],
         [("sg1", 1, 65535),
          ("sg2", 1, 65535)]),
