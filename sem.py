@@ -376,6 +376,28 @@ test_config6 = \
         [("sg3", 1, 65535)])],
       [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
 
+test_config7 = \
+    Configuration(
+        [("a",
+          [],
+          [("b", 1, 65535)]),
+         ("b",
+           [("a", 1, 65535)],
+           []),
+         ("c",
+           [],
+           [("d", 1, 65535)]),
+         ("d",
+           [("c", 1, 65535)],
+           []),
+         ("e",
+           [],
+           [("f", 1, 65535)]),
+         ("f",
+           [("e", 1, 65535)],
+           [])],
+         [("m1", "a"), ("m2", "b"), ("m3", "c"), ("m4", "d"), ("m5", "e")])
+
 if __name__ == "__main__":
   configs = [test_config1, test_config2, test_config3, test_config4, test_config5, test_config6]
   for config in configs:
