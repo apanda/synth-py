@@ -63,10 +63,10 @@ class Configuration(object):
   """An entire configuration"""
   def __init__ (self, securitygroups, instances):
     self.secgroups = map(lambda i: SecurityGroup(*i), securitygroups)
-    self.secgroups.append(\
-        SecurityGroup(SecurityGroup.world, \
-          [(SecurityGroup.world, 1, 65535)],\
-          [(SecurityGroup.world, 1, 65535)]))
+    #self.secgroups.append(\
+        #SecurityGroup(SecurityGroup.world, \
+          #[(SecurityGroup.world, 1, 65535)],\
+          #[(SecurityGroup.world, 1, 65535)]))
     self.instances = map(lambda i: Instance(*i), instances)
     self.secgroup_map = {sg.name: sg for sg in self.secgroups}
     self.instance_map = {vm.name: vm.group for vm in self.instances}
@@ -368,12 +368,15 @@ test_config6 = \
          ("sg2", 1, 65535)]),
       ("sg3",
         [("sg4", 22)],
-        []),
+        [("sg4", 22)]),
       ("sg4",
-        [("any", 22),
-         ("any", 80),
+        [("sg5", 22),
+         ("sg5", 80),
          ("sg3", 1, 65535)],
-        [("sg3", 1, 65535)])],
+        [("sg3", 1, 65535)]),
+      ("sg5",
+        [],
+        [("sg4", 1, 65535)])],
       [("a", "sg1"), ("b", "sg2"), ("c", "sg3"), ("d", "sg4")])
 
 test_config7 = \

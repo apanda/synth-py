@@ -22,16 +22,31 @@ def process_configuration (configuration, port):
   sg3 = z3.Const('s3', sg_node)
   previously_unallowed = []
   
-  # Always unreachable from self (not doing this breaks many things)
   axioms.append(z3.ForAll([sg1], z3.Not(d_reach(sg1, sg1))))
-  axioms.append(z3.ForAll([sg1], z3.Not(reach(sg1, sg1))))
-  # Closure
-  axioms.append(z3.ForAll([sg1, sg2], reach(sg1, sg2) ==
-      z3.Or(d_reach(sg1, sg2),\
-        z3.Exists([sg3], \
-          z3.And(reach(sg1, sg3),\
-                 d_reach(sg3, sg2),
-                 z3.Not(sg1 == sg2))))))
+  #axioms.append(z3.ForAll([sg1], z3.Not(reach(sg1, sg1))))
+  ## Closure
+  max_hops = len(secgroup_all) + 1
+  closure_properties = []
+  for i in xrange(0, max_hops):
+    temp = [z3.Const('s_%d'%j, sg_node) for j in xrange(i)]
+    vals = list(temp)
+    temp.append(sg2)
+    temp = [sg1] + temp
+    path = map(lambda (a, b): d_reach(a, b), zip(temp, temp[1:]))
+    print path
+    if vals:
+      closure_properties.append(z3.Exists(vals, z3.And(path)))
+    else:
+      closure_properties.append(z3.And(path))
+
+  axioms.append(z3.ForAll([sg1, sg2], z3.Implies(reach(sg1, sg2), \
+      z3.Or(sg1 == sg2, \
+            *closure_properties))))
+  axioms.append(z3.ForAll([sg1, sg2, sg3], z3.Implies(z3.And(reach(sg1, sg2), reach(sg2, sg3)),\
+                                                       reach(sg1, sg3))))
+  axioms.append(z3.ForAll([sg1, sg2], z3.Implies(d_reach(sg1, sg2), reach(sg1, sg2))))
+  axioms.append(z3.ForAll([sg1], reach(sg1, sg1)))
+  axioms.append(z3.ForAll([sg1], z3.Or(map(lambda s: sg1 == s, sg_nodes))))
 
   # Look at the combination of things that are or are not allowed.
   for (s1, s2) in combinations(secgroup_all, 2):
@@ -102,6 +117,10 @@ def process_configuration (configuration, port):
       consider = filter(lambda (a, b): a == sg, self.previously_unallowed)
       for (a, b) in consider:
         self.disallow_indirect_connection(a, b)
+
+    def disallow_all_new (self):
+      for (a, b) in self.previously_unallowed:
+        self.disallow_direct_connection(a, b)
 
     def check_and_interpret (self):
       """Synthesize configuration based on current parameters"""
